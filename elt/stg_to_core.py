@@ -147,18 +147,18 @@ def normalize_row(row: Dict[str, Any]) -> NormalizedPolicy:
     ext_id = row["policy_id"]
     ext_source = ETL_SOURCE
     title = raw_json.get("plcyNm", "")
-    summary_raw = raw_json.get("plcyExplnCn", "")
+    summary_raw = raw_json.get("plcyCn", "")
     description_raw = raw_json.get("plcySprtCn", "")
     summary_ai = ai_summary(raw_json)
     status = set_policy_status(raw_json.get("aplyPrdSeCd", ""), raw_json.get("aplyYmd", ""))     # status는 DB단 트리거에서 처리하도록 변경
     apply_start, apply_end = parse_period_field(raw_json.get("aplyYmd", ""))
     last_external_modified = parse_modified_datetime(raw_json.get("lastMdfcnDt"))
     views = int(raw_json.get("inqCnt", 0))
-    supervising_org = raw_json.get("sprvsnInstCdNm", "")
-    operating_org = raw_json.get("operInstCdNm", "")
-    apply_url = raw_json.get("aplyUrlAddr", "")
-    ref_url_1 = raw_json.get("refUrlAddr1", "")
-    ref_url_2 = raw_json.get("refUrlAddr2", "")
+    supervising_org = raw_json.get("sprvsnInstCdNm") or None
+    operating_org = raw_json.get("operInstCdNm") or None
+    apply_url = raw_json.get("aplyUrlAddr") or None
+    ref_url_1 = raw_json.get("refUrlAddr1") or None
+    ref_url_2 = raw_json.get("refUrlAddr2") or None
     payload = raw_json
     content_hash = row["record_hash"]
 
@@ -180,23 +180,23 @@ def normalize_row(row: Dict[str, Any]) -> NormalizedPolicy:
     income_type = set_income_type(raw_json.get("earnCndSeCd", ""))
     income_min = to_int_or_none(raw_json.get("earnMinAmt", 0))
     income_max = to_int_or_none(raw_json.get("earnMaxAmt", 0))
-    income_text = raw_json.get("earnEtcCn", "")
+    income_text = raw_json.get("earnEtcCn") or None
 
     # core.policy (추가 필드)
     period_type = set_period_type(raw_json.get("bizPrdSeCd", ""))
     period_start = parse_date(raw_json.get("bizPrdBgngYmd", ""))
     period_end = parse_date(raw_json.get("bizPrdEndYmd", ""))
-    period_etc = raw_json.get("bizPrdEtcCn", "")
+    period_etc = clean_dash_to_null(raw_json.get("bizPrdEtcCn"))
     apply_type = set_apply_type(raw_json.get("aplyPrdSeCd", ""))
-    announcement = raw_json.get("srngMthdCn", "")
-    info_etc = raw_json.get("etcMttrCn", "")
+    announcement = clean_dash_to_null(raw_json.get("srngMthdCn"))
+    info_etc = clean_dash_to_null(raw_json.get("etcMttrCn"))
     first_external_created = parse_modified_datetime(raw_json.get("frstRegDt", ""))
-    required_documents = raw_json.get("sbmsnDcmntCn", "")
-    application_process = raw_json.get("plcyAplyMthdCn", "")
+    required_documents = clean_dash_to_null(raw_json.get("sbmsnDcmntCn"))
+    application_process = clean_dash_to_null(raw_json.get("plcyAplyMthdCn"))
 
     # core.policy_eligibility (추가 필드)
-    eligibility_additional = raw_json.get("addAplyQlfcCndCn", "")
-    eligibility_restrictive = raw_json.get("ptcpPrpTrgtCn", "")
+    eligibility_additional = clean_dash_to_null(raw_json.get("addAplyQlfcCndCn"))
+    eligibility_restrictive = clean_dash_to_null(raw_json.get("ptcpPrpTrgtCn"))
     restrict_education = set_education_restriction(raw_json.get("schoolCd", ""))
     restrict_major = set_major_restriction(raw_json.get("plcyMajorCd", ""))
     restrict_job_status = set_job_status_restriction(raw_json.get("jobCd", ""))
@@ -400,6 +400,15 @@ def to_int_or_none(v: Any) -> Optional[int]:
         return int(v)
     except (TypeError, ValueError):
         return None
+
+def clean_dash_to_null(value: Any) -> Optional[str]:
+    """값이 정확히 '-'이거나 빈 문자열이면 None을 반환, 그렇지 않으면 문자열로 반환"""
+    if value is None:
+        return None
+    str_value = str(value).strip()
+    if str_value == "-" or str_value == "":
+        return None
+    return str_value
 
 def upsert_policy(conn: Connection, items: List[NormalizedPolicy]) -> int:
     if not items:
