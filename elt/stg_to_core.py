@@ -109,6 +109,26 @@ class NormalizedPolicy:
     income_max: int
     income_text: str
 
+    period_type: str
+    period_start: date
+    period_end: date
+    period_etc: str
+
+    apply_type: str
+    announcement: str
+    info_etc: str
+    first_external_created: datetime
+    required_documents: str
+
+    application_process: str
+
+    eligibility_additional: str
+    eligibility_restrictive: str
+    restrict_education: bool
+    restrict_major: bool
+    restrict_job_status: bool
+    restrict_specialization: bool
+
     # 기본값 가지는 필드들은 dataclass 마지막 부분에 작성할 것
     subcategories: List[str] = None
     educations: List[str] = None
@@ -122,6 +142,7 @@ class NormalizedPolicy:
 def normalize_row(row: Dict[str, Any]) -> NormalizedPolicy:
     raw_json = row["raw_json"]
 
+    # core.policy
     id = row["policy_id"]
     ext_id = row["policy_id"]
     ext_source = ETL_SOURCE
@@ -129,7 +150,7 @@ def normalize_row(row: Dict[str, Any]) -> NormalizedPolicy:
     summary_raw = raw_json.get("plcyExplnCn", "")
     description_raw = raw_json.get("plcySprtCn", "")
     summary_ai = ai_summary(raw_json)
-    status = set_policy_status(raw_json.get("aplyPrdSeCd", ""), raw_json.get("aplyYmd", ""))
+    status = set_policy_status(raw_json.get("aplyPrdSeCd", ""), raw_json.get("aplyYmd", ""))     # status는 DB단 트리거에서 처리하도록 변경
     apply_start, apply_end = parse_period_field(raw_json.get("aplyYmd", ""))
     last_external_modified = parse_modified_datetime(raw_json.get("lastMdfcnDt"))
     views = int(raw_json.get("inqCnt", 0))
@@ -141,15 +162,18 @@ def normalize_row(row: Dict[str, Any]) -> NormalizedPolicy:
     payload = raw_json
     content_hash = row["record_hash"]
 
+    # core.policy_eligibility_* (다대다 관계)
     subcategories = extract_list_from_payload(raw_json, "mclsfNm")
     educations = extract_list_from_payload(raw_json, "schoolCd")
     job_status = extract_list_from_payload(raw_json, "jobCd")
     majors = extract_list_from_payload(raw_json, "plcyMajorCd")
     specializations = extract_list_from_payload(raw_json, "sbizCd")
 
+    # core.policy_keyword, core.policy_region
     keywords = extract_list_from_payload(raw_json, "plcyKywdNm")
     regions = extract_list_from_payload(raw_json, "zipCd")
 
+    # core.policy_eligibility
     marital_status = set_marital_status(raw_json.get("mrgSttsCd", ""))
     age_min = to_int_or_none(raw_json.get("sprtTrgtMinAge", 0))
     age_max = to_int_or_none(raw_json.get("sprtTrgtMaxAge", 0))
@@ -157,6 +181,29 @@ def normalize_row(row: Dict[str, Any]) -> NormalizedPolicy:
     income_min = to_int_or_none(raw_json.get("earnMinAmt", 0))
     income_max = to_int_or_none(raw_json.get("earnMaxAmt", 0))
     income_text = raw_json.get("earnEtcCn", "")
+
+    # core.policy (추가 필드)
+    period_type = set_period_type(raw_json.get("bizPrdSeCd", ""))
+    period_start = parse_date(raw_json.get("bizPrdBgngYmd", ""))
+    period_end = parse_date(raw_json.get("bizPrdEndYmd", ""))
+    period_etc = raw_json.get("bizPrdEtcCn", "")
+    apply_type = set_apply_type(raw_json.get("aplyPrdSeCd", ""))
+    announcement = raw_json.get("srngMthdCn", "")
+    info_etc = raw_json.get("etcMttrCn", "")
+    first_external_created = parse_modified_datetime(raw_json.get("frstRegDt", ""))
+    required_documents = raw_json.get("sbmsnDcmntCn", "")
+    application_process = raw_json.get("plcyAplyMthdCn", "")
+
+    # core.policy_eligibility (추가 필드)
+    eligibility_additional = raw_json.get("addAplyQlfcCndCn", "")
+    eligibility_restrictive = raw_json.get("ptcpPrpTrgtCn", "")
+    restrict_education = set_education_restriction(raw_json.get("schoolCd", ""))
+    restrict_major = set_major_restriction(raw_json.get("plcyMajorCd", ""))
+    restrict_job_status = set_job_status_restriction(raw_json.get("jobCd", ""))
+    restrict_specialization = set_specialization_restriction(raw_json.get("sbizCd", ""))
+
+    
+
 
     return NormalizedPolicy(
         id=id,
@@ -194,7 +241,27 @@ def normalize_row(row: Dict[str, Any]) -> NormalizedPolicy:
         income_type=income_type,
         income_min=income_min,
         income_max=income_max,
-        income_text=income_text
+        income_text=income_text,
+
+        period_type=period_type,
+        period_start=period_start,
+        period_end=period_end,
+        period_etc=period_etc,
+
+        apply_type=apply_type,
+        announcement=announcement,
+        info_etc=info_etc,
+        first_external_created=first_external_created,
+        required_documents=required_documents,
+
+        application_process=application_process,
+
+        eligibility_additional=eligibility_additional,
+        eligibility_restrictive=eligibility_restrictive,
+        restrict_education=restrict_education,
+        restrict_major=restrict_major,
+        restrict_job_status=restrict_job_status,
+        restrict_specialization=restrict_specialization
     )
     
 def extract_list_from_payload(payload: dict, field: str) -> list[str]:
@@ -212,6 +279,14 @@ def parse_modified_datetime(dt_str: str) -> datetime:
         except ValueError:
             last_external_modified = None
     return last_external_modified
+
+def parse_date(dt_str: str) -> date:
+    if dt_str:
+        try:
+            return datetime.strptime(dt_str, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+    return None
 
 def set_income_type(earnCndSeCd: str) -> str:
     if earnCndSeCd == "0043001":
@@ -235,21 +310,64 @@ def set_marital_status(mrgSttsCd: str) -> str:
     
 # TODO: UPCOMING 상태 처리 필요
 def set_policy_status(aplyPrdSeCd: str, aplyYmd: str) -> str:
-    if aplyPrdSeCd == "0057003":
-        return "CLOSED"
+    return None
+    # if aplyPrdSeCd == "0057003":
+    #     return "CLOSED"
+    # elif aplyPrdSeCd == "0057002":
+    #     return "OPEN"
+    # elif aplyPrdSeCd == "0057001":
+    #     apply_start, apply_end = parse_period_field(aplyYmd)
+    #     if apply_start and apply_end:
+    #         today = date.today()
+    #         if apply_start <= today <= apply_end:
+    #             return "OPEN"
+    #         else:
+    #             return "CLOSED"
+    #     else:
+    #         return "UNKNOWN"
+        
+def set_period_type(bizPrdSeCd: str) -> str:
+    if bizPrdSeCd == "0056001":
+        return "PERIODIC"
+    elif bizPrdSeCd == "0056002":
+        return "ETC"
+    else:
+        return "UNKNOWN"
+    
+def set_apply_type(aplyPrdSeCd: str) -> str:
+    if aplyPrdSeCd == "0057001":
+        return "PERIODIC"
     elif aplyPrdSeCd == "0057002":
-        return "OPEN"
-    elif aplyPrdSeCd == "0057001":
-        apply_start, apply_end = parse_period_field(aplyYmd)
-        if apply_start and apply_end:
-            today = date.today()
-            if apply_start <= today <= apply_end:
-                return "OPEN"
-            else:
-                return "CLOSED"
-        else:
-            return "UNKNOWN"
+        return "ALWAYS_OPEN"
+    elif aplyPrdSeCd == "0057003":
+        return "CLOSED"
+    else:
+        return "UNKNOWN"
 
+def set_education_restriction(schoolCd: str) -> bool:
+    if schoolCd == "0049010":
+        return False
+    else:
+        return True
+    
+def set_major_restriction(plcyMajorCd: str) -> bool:
+    if plcyMajorCd == "0011009":
+        return False
+    else:
+        return True
+
+def set_job_status_restriction(jobCd: str) -> bool:
+    if jobCd == "0013010":
+        return False
+    else:
+        return True
+
+def set_specialization_restriction(sbizCd: str) -> bool:
+    if sbizCd == "0014010":
+        return False
+    else:
+        return True
+    
 def parse_period_field(aplyYmd: str) -> tuple[Optional[date], Optional[date]]:
     # 형식 참고 - "aplyYmd": "20240823 ~ 20240913"
     try:
@@ -292,12 +410,20 @@ def upsert_policy(conn: Connection, items: List[NormalizedPolicy]) -> int:
             id, ext_id, ext_source, title, summary_raw, description_raw, summary_ai,
             status, apply_start, apply_end, last_external_modified, views,
             supervising_org, operating_org, apply_url, ref_url_1, ref_url_2,
-            payload, content_hash
+            payload, content_hash,
+
+            period_type, period_start, period_end, period_etc,
+            apply_type, announcement, info_etc, first_external_created, required_documents, application_process
+        
         ) VALUES (
             :id, :ext_id, :ext_source, :title, :summary_raw, :description_raw, :summary_ai,
             :status, :apply_start, :apply_end, :last_external_modified, :views,
             :supervising_org, :operating_org, :apply_url, :ref_url_1, :ref_url_2,
-            :payload, :content_hash
+            :payload, :content_hash,
+
+            :period_type, :period_start, :period_end, :period_etc,
+            :apply_type, :announcement, :info_etc, :first_external_created, :required_documents, :application_process
+        
         ) ON CONFLICT (id) DO UPDATE SET
             ext_id = EXCLUDED.ext_id,
             ext_source = EXCLUDED.ext_source,
@@ -316,7 +442,18 @@ def upsert_policy(conn: Connection, items: List[NormalizedPolicy]) -> int:
             ref_url_1 = EXCLUDED.ref_url_1,
             ref_url_2 = EXCLUDED.ref_url_2,
             payload = EXCLUDED.payload,
-            content_hash = EXCLUDED.content_hash
+            content_hash = EXCLUDED.content_hash,
+
+            period_type = EXCLUDED.period_type,
+            period_start = EXCLUDED.period_start,
+            period_end = EXCLUDED.period_end,
+            period_etc = EXCLUDED.period_etc,
+            apply_type = EXCLUDED.apply_type,
+            announcement = EXCLUDED.announcement,
+            info_etc = EXCLUDED.info_etc,
+            first_external_created = EXCLUDED.first_external_created,
+            required_documents = EXCLUDED.required_documents,
+            application_process = EXCLUDED.application_process
         """)
     params = [{
         "id": item.id,
@@ -337,7 +474,18 @@ def upsert_policy(conn: Connection, items: List[NormalizedPolicy]) -> int:
         "ref_url_1": item.ref_url_1,
         "ref_url_2": item.ref_url_2,
         "payload": json.dumps(item.payload, ensure_ascii=False),
-        "content_hash": item.content_hash
+        "content_hash": item.content_hash,
+
+        "period_type": item.period_type,
+        "period_start": item.period_start,
+        "period_end": item.period_end,
+        "period_etc": item.period_etc,
+        "apply_type": item.apply_type,
+        "announcement": item.announcement,
+        "info_etc": item.info_etc,
+        "first_external_created": item.first_external_created,
+        "required_documents": item.required_documents,
+        "application_process": item.application_process
     } for item in items]
 
     conn.execute(sql, params)
@@ -393,9 +541,11 @@ def sync_policy_eligibility(conn: Connection, items: List[Any]) -> Dict[str, int
     """
     sql = text("""
         INSERT INTO core.policy_eligibility
-            (policy_id, marital_status, age_min, age_max, income_type, income_min, income_max, income_text)
+            (policy_id, marital_status, age_min, age_max, income_type, income_min, income_max, income_text,
+             eligibility_additional, eligibility_restrictive, restrict_education, restrict_major, restrict_job_status, restrict_specialization)
         VALUES
-            (:policy_id, :marital_status, :age_min, :age_max, :income_type, :income_min, :income_max, :income_text)
+            (:policy_id, :marital_status, :age_min, :age_max, :income_type, :income_min, :income_max, :income_text,
+             :eligibility_additional, :eligibility_restrictive, :restrict_education, :restrict_major, :restrict_job_status, :restrict_specialization)
         ON CONFLICT (policy_id) DO UPDATE
         SET
             marital_status = EXCLUDED.marital_status,
@@ -404,7 +554,16 @@ def sync_policy_eligibility(conn: Connection, items: List[Any]) -> Dict[str, int
             income_type    = EXCLUDED.income_type,
             income_min     = EXCLUDED.income_min,
             income_max     = EXCLUDED.income_max,
-            income_text    = EXCLUDED.income_text
+            income_text    = EXCLUDED.income_text,
+               
+            eligibility_additional  = EXCLUDED.eligibility_additional,
+            eligibility_restrictive = EXCLUDED.eligibility_restrictive,
+
+            restrict_education      = EXCLUDED.restrict_education,
+            restrict_major          = EXCLUDED.restrict_major,
+            restrict_job_status     = EXCLUDED.restrict_job_status,
+            restrict_specialization = EXCLUDED.restrict_specialization
+
         RETURNING (xmax = 0) AS inserted
     """)
 
@@ -425,6 +584,14 @@ def sync_policy_eligibility(conn: Connection, items: List[Any]) -> Dict[str, int
             "income_min": to_int_or_none(getattr(it, "income_min", None)),
             "income_max": to_int_or_none(getattr(it, "income_max", None)),
             "income_text": getattr(it, "income_text", None),        # 그대로
+
+            "eligibility_additional": getattr(it, "eligibility_additional", None),
+            "eligibility_restrictive": getattr(it, "eligibility_restrictive", None),
+
+            "restrict_education": getattr(it, "restrict_education", None),
+            "restrict_major": getattr(it, "restrict_major", None),
+            "restrict_job_status": getattr(it, "restrict_job_status", None),
+            "restrict_specialization": getattr(it, "restrict_specialization", None),
         }
 
         row = conn.execute(sql, params).fetchone()
